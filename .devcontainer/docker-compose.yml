@@ -1,0 +1,63 @@
+# SPDX-FileCopyrightText: 2026 Benoit Rolandeau <borlnov.obsessio@gmail.com>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Dev container service for Swayve.
+#
+# The repository clone is mounted at /workspaces/swayve and nothing else from the host is exposed.
+# Git worktrees live inside the clone, under the gitignored ./worktrees/ directory, so they need no
+# extra mount — see ../worktrees/README.md.
+#
+# This file replaces the former devcontainer.json `runArgs`, `workspaceMount` and `build`, none
+# of which are honoured once a container is Docker Compose based.
+
+services:
+  dev:
+    build:
+      # Context is .devcontainer (this file's directory).
+      context: .
+      dockerfile: Dockerfile
+      args:
+        USERNAME: debian
+    # Was runArgs: --network=host
+    network_mode: host
+    # No tool credentials are passed in from the host: both gh and Claude Code are signed into from
+    # inside the container once, and their config volumes below keep that login across rebuilds.
+    volumes:
+      # Workspace mount: the clone (`..`, i.e. the parent of this file's .devcontainer directory)
+      # at /workspaces/swayve.
+      #
+      # The target below MUST equal workspaceFolder in devcontainer.json (a mount target inherently
+      # has to). That file is the single source of truth; this is the one value that has to be kept
+      # in sync with it by hand.
+      - ..:/workspaces/swayve:cached
+      # Was runArgs: --volume=/tmp/.X11-unix:/tmp/.X11-unix:z. Forwards the X11 socket so the Flutter
+      # Linux desktop app can open a window from inside the container.
+      - /tmp/.X11-unix:/tmp/.X11-unix:z
+      # Claude Code config (login, sessions, transcripts, todos, plans, plugin index; CLAUDE_CONFIG_DIR
+      # points here) in an ISOLATED named volume, NOT a host bind mount: Claude's plugin index stores
+      # absolute in-container paths that a shared host ~/.claude would leak across containers/users. The
+      # Dockerfile pre-creates ~/.claude so this volume initialises with user ownership. See README.md.
+      - swayve-claude-config:/home/debian/.claude
+      # GitHub CLI credentials (hosts.yml, written by `gh auth login`; GH_CONFIG_DIR points here) in
+      # a named volume, so the interactive login survives rebuilds. Only the gh directory is
+      # mounted, never the whole ~/.config: the image and Flutter write their own state next to it,
+      # and image content is copied into a named volume once at creation, so it would then go stale.
+      # The Dockerfile pre-creates ~/.config/gh so this volume initialises with user ownership.
+      - swayve-gh-config:/home/debian/.config/gh
+      # Pub package cache in a named volume: without it every fresh `docker compose run` container
+      # starts with an empty ~/.pub-cache and re-downloads all dependencies. The Dockerfile
+      # pre-creates the directory so the volume initialises with user ownership.
+      - swayve-pub-cache:/home/debian/.pub-cache
+    # The image's CMD is just bash; keep the service alive so VS Code can attach into it.
+    command: sleep infinity
+
+# One volume per tool rather than a shared credentials volume, so each can be reset on its own
+# (`docker volume rm swayve-gh-config` to force a fresh gh login, without touching Claude).
+volumes:
+  # Isolated per-container Claude Code config. Persists across rebuilds, shared with nothing.
+  swayve-claude-config:
+  # Isolated per-container gh config. Persists across rebuilds, shared with nothing.
+  swayve-gh-config:
+  # Pub package cache shared by successive containers of this project (see the mount above).
+  swayve-pub-cache:
